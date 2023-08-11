@@ -1,32 +1,35 @@
-# edkey
-edkey allows you to marshal/write ED25519 private keys in the OpenSSH private key format
+edkey
+=====
+edkey formats an
+[ED25519 private key](https://pkg.go.dev/crypto/ed25519#PrivateKey)
+in OpenSSH's PEM
+[format](https://cvsweb.openbsd.org/cgi-bin/cvsweb/src/usr.bin/ssh/PROTOCOL.key?rev=1.3&content-type=text/x-cvsweb-markup).
 
-## Example
+Please see [example.go](example.go) for an example.
+
+Installation
+------------
+```sh
+go get github.com/magisterquis/edkey@latest
+```
+
+Quickstart
+----------
 ```go
-package main
-
-import (
-	"crypto/rand"
-	"encoding/pem"
-	"io/ioutil"
-	"github.com/mikesmitty/edkey"
-	"golang.org/x/crypto/ed25519"
-	"golang.org/x/crypto/ssh"
-)
-
-func main() {
-	// Generate a new private/public keypair for OpenSSH
-	pubKey, privKey, _ := ed25519.GenerateKey(rand.Reader)
-	publicKey, _ := ssh.NewPublicKey(pubKey)
-
-	pemKey := &pem.Block{
-		Type:  "OPENSSH PRIVATE KEY",
-		Bytes: edkey.MarshalED25519PrivateKey(privKey),
-	}
-	privateKey := pem.EncodeToMemory(pemKey)
-	authorizedKey := ssh.MarshalAuthorizedKey(publicKey)
-
-	_ = ioutil.WriteFile("id_ed25519", privateKey, 0600)
-	_ = ioutil.WriteFile("id_ed25519.pub", authorizedKey, 0644)
+_, kr, err := ed25519.GenerateKey(nil)
+if nil != err {
+        log.Fatalf("Error generating key: %s", err)
+}
+p, err := edkey.ToPEM(kr, "")
+if nil != err {
+        log.Fatalf("Error PEMifying key: %s", err)
+}
+if err := os.WriteFile("id_ed25519", p, 0600); nil != err {
+        log.Fatalf("Error writing key to file: %s", err)
 }
 ```
+
+Credit
+------
+Many thanks to [mikesmitty](https://github.com/mikesmitty) for the
+[original version](https://github.com/mikesmitty/edkey) of this library.

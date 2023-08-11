@@ -1,16 +1,49 @@
+// Package edkey converts ed25519 private keys to OpenSSH PEM format.
 package edkey
 
+/*
+ * edkey.go
+ * Turn an ed25519 key into an OpenSSH private key
+ * Modified By J. Stuart McMurray
+ * Created 20170222 by github.com/mikesmitty
+ * Last Modified 20230811
+ */
+
 import (
+	"crypto/ed25519"
+	"encoding/pem"
+	"fmt"
 	"math/rand"
 
-	"golang.org/x/crypto/ed25519"
 	"golang.org/x/crypto/ssh"
 )
 
-/* Writes ed25519 private keys into the new OpenSSH private key format.
-I have no idea why this isn't implemented anywhere yet, you can do seemingly
-everything except write it to disk in the OpenSSH private key format. */
-func MarshalED25519PrivateKey(key ed25519.PrivateKey) []byte {
+const (
+	blockSize    = 8
+	cipherName   = "none"
+	kdfName      = "none"
+	pubkeyPrefix = "\x00\x00\x00\x0b" +
+		ssh.KeyAlgoED25519 +
+		"\x00\x00\x00 "
+)
+
+/* Most of the below code is forked from https://github.com/mikesmitty/edkey */
+
+// ToPEM encodes a ed25519 private key into the OpenSSH PEM private key format,
+// optionally setting a comment (ssh-keygen -C -style).  The returned slice is
+// suitable to be written to a file and passed to OpenSSH via
+// -i/-oIdentityFile.
+func ToPEM(key ed25519.PrivateKey, comment string) ([]byte, error) {
+	return marshal(rand.Uint32(), key, comment) /* Random since go 1.20 */
+}
+
+// marshal is like ToPem, but requires the random checkint be passed in.  This
+// is used for testing.
+func marshal(
+	ci uint32,
+	key ed25519.PrivateKey,
+	comment string,
+) ([]byte, error) {
 	// Add our key header (followed by a null byte)
 	magic := append([]byte("openssh-key-v1"), 0)
 
@@ -35,7 +68,6 @@ func MarshalED25519PrivateKey(key ed25519.PrivateKey) []byte {
 	}{}
 
 	// Set our check ints
-	ci := rand.Uint32()
 	pk1.Check1 = ci
 	pk1.Check2 = ci
 
@@ -43,25 +75,27 @@ func MarshalED25519PrivateKey(key ed25519.PrivateKey) []byte {
 	pk1.Keytype = ssh.KeyAlgoED25519
 
 	// Add the pubkey to the optionally-encrypted block
-	pk, ok := key.Public().(ed25519.PublicKey)
+	ku, ok := key.Public().(ed25519.PublicKey)
 	if !ok {
-		//fmt.Fprintln(os.Stderr, "ed25519.PublicKey type assertion failed on an ed25519 public key. This should never ever happen.")
-		return nil
+		/* This is silly. */
+		return nil, fmt.Errorf(
+			"unexpected public key type %T",
+			key.Public(),
+		)
 	}
-	pubKey := []byte(pk)
-	pk1.Pub = pubKey
+	pk1.Pub = ku
 
 	// Add our private key
 	pk1.Priv = []byte(key)
 
 	// Might be useful to put something in here at some point
-	pk1.Comment = ""
+	pk1.Comment = comment
 
-	// Add some padding to match the encryption block size within PrivKeyBlock (without Pad field)
-	// 8 doesn't match the documentation, but that's what ssh-keygen uses for unencrypted keys. *shrug*
-	bs := 8
+	// Add some padding to match the encryption block size within
+	// PrivKeyBlock (without Pad field) 8 doesn't match the documentation,
+	// but that's what ssh-keygen uses for unencrypted keys. *shrug*
 	blockLen := len(ssh.Marshal(pk1))
-	padLen := (bs - (blockLen % bs)) % bs
+	padLen := (blockSize - (blockLen % blockSize)) % blockSize
 	pk1.Pad = make([]byte, padLen)
 
 	// Padding is a sequence of bytes like: 1, 2, 3...
@@ -69,20 +103,18 @@ func MarshalED25519PrivateKey(key ed25519.PrivateKey) []byte {
 		pk1.Pad[i] = byte(i + 1)
 	}
 
-	// Generate the pubkey prefix "\0\0\0\nssh-ed25519\0\0\0 "
-	prefix := []byte{0x0, 0x0, 0x0, 0x0b}
-	prefix = append(prefix, []byte(ssh.KeyAlgoED25519)...)
-	prefix = append(prefix, []byte{0x0, 0x0, 0x0, 0x20}...)
-
 	// Only going to support unencrypted keys for now
-	w.CipherName = "none"
-	w.KdfName = "none"
+	w.CipherName = cipherName
+	w.KdfName = kdfName
 	w.KdfOpts = ""
 	w.NumKeys = 1
-	w.PubKey = append(prefix, pubKey...)
+	w.PubKey = append([]byte(pubkeyPrefix), pk1.Pub...)
 	w.PrivKeyBlock = ssh.Marshal(pk1)
 
 	magic = append(magic, ssh.Marshal(w)...)
 
-	return magic
+	return pem.EncodeToMemory(&pem.Block{
+		Type:  "OPENSSH PRIVATE KEY",
+		Bytes: magic,
+	}), nil
 }
